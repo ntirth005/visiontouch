@@ -18,8 +18,9 @@ class CoordinateMapper:
         self.roi_y1 = cam_h - my
         self.roi_w = self.roi_x1 - self.roi_x0
         self.roi_h = self.roi_y1 - self.roi_y0
-        self._sx = deque(maxlen=5)
-        self._sy = deque(maxlen=5)
+        # Slightly longer window + median reduces occasional landmark spikes.
+        self._sx = deque(maxlen=7)
+        self._sy = deque(maxlen=7)
 
     def map(self, px: int, py: int, smooth: bool = True) -> Tuple[int, int]:
         cx = max(self.roi_x0, min(self.roi_x1, px))
@@ -31,8 +32,8 @@ class CoordinateMapper:
         if smooth:
             self._sx.append(sx)
             self._sy.append(sy)
-            sx = int(np.mean(self._sx))
-            sy = int(np.mean(self._sy))
+            sx = int(np.median(self._sx))
+            sy = int(np.median(self._sy))
         return sx, sy
 
     def roi_rect(self):

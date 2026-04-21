@@ -48,13 +48,21 @@ class GestureEngine:
     ZOOM_DEAD_ZONE_PX: int    = 12      # px ignored around anchor (kills idle jitter)
     ZOOM_SCALE_DIVISOR: float = 80.0    # px of movement that equals scale 1.0
     ZOOM_GRACE_SEC: float     = 0.15    # grace period for dropped frames in zoom mode
-    SWIPE_THRESHOLD_PX: int   = 80    # px of horizontal movement to trigger swipe
+    # Swipe thresholds
+    # Note: screen coords are smoothed, so we also use raw camera X as the
+    # magnitude source to keep swipes responsive.
+    SWIPE_THRESHOLD_PX: int   = 35      # screen px of horizontal movement
+    SWIPE_THRESHOLD_CAM_PX: int = 30    # camera px of horizontal movement
+
+    # ── Right-click (index+pinky pose) ───────────────────────────────────────
+    RIGHT_CLICK_COOLDOWN_SEC: float = 0.6
 
     # ── Internal states ───────────────────────────────────────────────────────
     _IDLE          = "IDLE"
     _MOVING        = "MOVING"
     _PINCHING      = "PINCHING"
     _RIGHT_PINCHING = "RIGHT_PINCHING"
+    _PINKY_PINCHING = "PINKY_PINCHING"
     _ZOOM          = "ZOOM"
 
     def __init__(self) -> None:
@@ -71,9 +79,14 @@ class GestureEngine:
 
         # Swipe & Freeze
         self._swipe_start_x: Optional[int] = None
+        self._swipe_start_cam_x: Optional[int] = None
         self._swipe_fired: bool = False
         self._cursor_frozen_until: float = 0.0
         self._frozen_pos: tuple[int, int] = (0, 0)
+
+        # Index + pinky right-click pose edge tracking
+        self._pinky_pose_active: bool = False
+        self._last_pinky_rightclick_ts: float = 0.0
 
     # ──────────────────────────────────────────────────────────────────────────
     # Public API
@@ -94,9 +107,13 @@ class GestureEngine:
         
         # 5-Finger Freeze Activation
         if fingers_up_count == 5:
-            if getattr(self, '_cursor_frozen_until', 0.0) < fs.ts:
+            # Freeze cursor movement for a fixed window when activated.
+            # Do not extend the freeze by holding the pose.
+            # Also, avoid triggering freeze while the user is actively pinching.
+            is_open_hand = fs.pinch_dist > self.PINCH_OPEN_PX and fs.middle_pinch_dist > self.PINCH_OPEN_PX
+            if is_open_hand and getattr(self, '_cursor_frozen_until', 0.0) < fs.ts:
                 self._frozen_pos = self._cursor_pos(fs)
-            self._cursor_frozen_until = fs.ts + 2.0
+                self._cursor_frozen_until = fs.ts + 2.0
 
         ev = self._classify(fs)
         
@@ -138,6 +155,7 @@ class GestureEngine:
                 self._exit_zoom()
                 self._zoom_lost_ts = None
                 self._state = self._IDLE
+                return ActionEvent("MOVE", pos)
             else:
                 return ActionEvent("MOVE", pos)
                 
@@ -183,9 +201,12 @@ class GestureEngine:
         """Decide which fingertip to use as the cursor.
 
         Rules:
-          1. If middle finger is up -> follow middle.
-          2. Otherwise -> follow index.
+          1. If index finger is up -> ALWAYS follow index.
+          2. Otherwise, if middle finger is up -> follow middle.
+          3. Otherwise -> fall back to index.
         """
+        if fs.index_up:
+            return (fs.screen_x, fs.screen_y)
         if fs.middle_up:
             return (fs.middle_screen_x, fs.middle_screen_y)
         return (fs.screen_x, fs.screen_y)
@@ -249,16 +270,18 @@ class GestureEngine:
         pos = self._cursor_pos(fs)
         fingers_up_count = sum([fs.index_up, fs.middle_up, fs.ring_up, fs.pinky_up, fs.thumb_up])
 
-        # 1.5. Swipes (strictly anatomical poses)
-        is_3f_swipe = fs.index_up and fs.middle_up and fs.ring_up and not fs.pinky_up and not fs.thumb_up
-        is_4f_swipe = fs.index_up and fs.middle_up and fs.ring_up and fs.pinky_up and not fs.thumb_up
+        # 1.5. Swipes
+        # Ignore thumb state: in practice the thumb often gets classified as "up"
+        # even when doing a 3-finger swipe, which would prevent swipe triggering.
+        is_3f_swipe = fs.index_up and fs.middle_up and fs.ring_up and not fs.pinky_up
+        is_4f_swipe = fs.index_up and fs.middle_up and fs.ring_up and fs.pinky_up
 
         if is_3f_swipe or is_4f_swipe:
             # Gracefully clean up states
             if self._state == self._ZOOM:
                 self._exit_zoom()
                 self._state = self._IDLE
-            elif self._state in (self._PINCHING, self._RIGHT_PINCHING):
+            elif self._state in (self._PINCHING, self._RIGHT_PINCHING, self._PINKY_PINCHING):
                 self._state = self._IDLE
                 self._pinch_start_ts = None
                 self._pinch_start_pos = None
@@ -266,19 +289,25 @@ class GestureEngine:
             # Process Swipe
             if getattr(self, '_swipe_start_x', None) is None:
                 self._swipe_start_x = pos[0]
+                self._swipe_start_cam_x = fs.index_tip_px[0]
                 self._swipe_fired = False
                 
             if not self._swipe_fired:
-                delta_x = pos[0] - self._swipe_start_x
-                if abs(delta_x) > self.SWIPE_THRESHOLD_PX:
+                start_screen_x = self._swipe_start_x if self._swipe_start_x is not None else pos[0]
+                start_cam_x = self._swipe_start_cam_x if self._swipe_start_cam_x is not None else fs.index_tip_px[0]
+                delta_screen_x = pos[0] - start_screen_x
+                delta_cam_x = fs.index_tip_px[0] - start_cam_x
+
+                if (abs(delta_screen_x) > self.SWIPE_THRESHOLD_PX) or (abs(delta_cam_x) > self.SWIPE_THRESHOLD_CAM_PX):
                     self._swipe_fired = True
-                    direction = "RIGHT" if delta_x > 0 else "LEFT"
+                    direction = "RIGHT" if delta_screen_x > 0 else "LEFT"
                     prefix = "3F" if is_3f_swipe else "4F"
                     return ActionEvent(f"SWIPE_{prefix}_{direction}", pos)
                     
             return ActionEvent("MOVE", pos)
         else:
             self._swipe_start_x = None
+            self._swipe_start_cam_x = None
             self._swipe_fired = False
 
         # 2. Zoom — highest priority when EXACTLY index + middle are visible.
@@ -294,6 +323,7 @@ class GestureEngine:
                 self._exit_zoom()
                 self._zoom_lost_ts = None
                 self._state = self._IDLE
+                return ActionEvent("MOVE", pos)
             else:
                 # Inside grace period: hold zoom state, wait for fingers to return
                 return ActionEvent("MOVE", pos)
@@ -315,31 +345,44 @@ class GestureEngine:
 
             return self._update_zoom(fs, pos)
 
-        # 3. Pinch gesture: index up and thumb close to index.
-        pinch_mode = fs.index_up and not fs.middle_up
+        # 3. Right click: index + pinky up (thumb ignored).
+        # Fires immediately when pose appears, even for a moment.
+        pinky_right_pose = fs.index_up and fs.pinky_up and not fs.middle_up and not fs.ring_up
+        if pinky_right_pose:
+            if (not self._pinky_pose_active) and (fs.ts - self._last_pinky_rightclick_ts >= self.RIGHT_CLICK_COOLDOWN_SEC):
+                self._pinky_pose_active = True
+                self._last_pinky_rightclick_ts = fs.ts
+                return ActionEvent("RIGHT_CLICK", pos)
+            self._pinky_pose_active = True
+            return ActionEvent("MOVE", pos)
+        else:
+            self._pinky_pose_active = False
+
+        # Normal click pinch should work whenever index is up and we're NOT in the exact zoom pose.
+        # This also allows click to work even if other fingers are up (including all-5).
+        # Index+pinky right-click is handled above via `pinky_right_pose`.
+        pinch_mode = fs.index_up and not is_zoom_pose
 
         if pinch_mode:
             if fs.pinch_dist < self.PINCH_CLOSE_PX:
                 # ── Fingers closing / staying closed ──────────────────────────
                 if self._state != self._PINCHING:
                     self._state = self._PINCHING
-                    self._pinch_start_pos = pos
-
-                return ActionEvent("MOVE", self._pinch_start_pos)
+                # IMPORTANT: keep cursor moving even while pinched.
+                return ActionEvent("MOVE", pos)
 
             if fs.pinch_dist > self.PINCH_OPEN_PX:
                 # ── Fingers open (release) ────────────────────────────────────
                 if self._state == self._PINCHING:
                     self._state = self._IDLE
-                    stored_pos = self._pinch_start_pos or pos
                     self._pinch_start_pos = None
-                    return self._on_pinch_release(stored_pos)
+                    # Click at current cursor position at release.
+                    return self._on_pinch_release(pos)
 
             # ── Grey zone (CLOSE <= dist <= OPEN) ─────────────────────────
             # Hold current state, just move.
             if self._state == self._PINCHING:
-                # Still deciding, keep frozen so user doesn't miss the button while separating fingers
-                return ActionEvent("MOVE", self._pinch_start_pos or pos)
+                return ActionEvent("MOVE", pos)
 
         # 3.5 Right click pinch: middle finger up, index down, and thumb close to middle.
         right_pinch_mode = fs.middle_up and not fs.index_up
@@ -362,7 +405,7 @@ class GestureEngine:
                 return ActionEvent("MOVE", self._pinch_start_pos or pos)
 
         # 4. Clean up stale pinch state if we left pinch mode unexpectedly.
-        if self._state in (self._PINCHING, self._RIGHT_PINCHING):
+        if self._state in (self._PINCHING, self._RIGHT_PINCHING, self._PINKY_PINCHING):
             self._state = self._IDLE
             self._pinch_start_pos = None
 
