@@ -5,15 +5,16 @@ import pyautogui
 from .types import ActionEvent
 from .overlay import overlay
 
-# Attempt to load Windows-specific touch injection for native pinch-to-zoom
+# Attempt to load Windows-specific touch injection for native pinch-to-zoom.
+# This is optional and should never prevent the app from starting.
 HAS_TOUCH = False
 try:
     from .windows_touch import touch_injector
-    if touch_injector.initialized:
-        HAS_TOUCH = True
-        print("[System] Windows Native Touch Injection successfully loaded and active.")
-except ImportError as e:
-    pass
+
+    HAS_TOUCH = True
+    print("[System] Touch injector module loaded (lazy init; may fall back to Ctrl+Scroll).")
+except Exception:
+    HAS_TOUCH = False
 
 class ActionDispatcher:
     """Receives ActionEvents and performs screen operations via PyAutoGUI."""

@@ -1,3 +1,6 @@
+python demo_superglue.py --nms_radius 4 --keypoint_threshold 0.005 --max_keypoints 2048 --superglue outdoor --sinkhorn_iterations 20 --match_threshold 0.05
+
+
 # Finger Controller — Gesture Guide
 
 This project controls the Windows mouse using hand tracking.

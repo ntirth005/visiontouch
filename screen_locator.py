@@ -4,10 +4,67 @@ from mss import mss
 import time
 
 
-WINDOW_LEFT = 1400
-WINDOW_TOP = 0
-WINDOW_WIDTH = 1920
-WINDOW_HEIGHT = 400
+WINDOW_WIDTH = 1280
+WINDOW_HEIGHT = 720
+
+    
+def print_screen_map(x_min, y_min, x_max, y_max,
+                     screen_w=1920, screen_h=1200,
+                     cols=40, rows=12):
+
+    def sc(v, src, dst):
+        return int((v / src) * dst)
+
+    # Clamp
+    x_min = max(0, x_min)
+    y_min = max(0, y_min)
+    x_max = min(screen_w, x_max)
+    y_max = min(screen_h, y_max)
+
+    # Scale
+    bx0 = sc(x_min, screen_w, cols)
+    by0 = sc(y_min, screen_h, rows)
+    bx1 = sc(x_max, screen_w, cols)
+    by1 = sc(y_max, screen_h, rows)
+
+    for row in range(rows):
+        line = ""
+        for col in range(cols):
+
+            # === BIG BOX ===
+            if row == 0 and col == 0:
+                line += "┌"
+            elif row == 0 and col == cols-1:
+                line += "┐"
+            elif row == rows-1 and col == 0:
+                line += "└"
+            elif row == rows-1 and col == cols-1:
+                line += "┘"
+            elif row == 0 or row == rows-1:
+                line += "─"
+            elif col == 0 or col == cols-1:
+                line += "│"
+
+            # === SMALL BOX ===
+            elif bx0 <= col < bx1 and by0 <= row < by1:
+
+                if row == by0 and col == bx0:
+                    line += "┌"
+                elif row == by0 and col == bx1-1:
+                    line += "┐"
+                elif row == by1-1 and col == bx0:
+                    line += "└"
+                elif row == by1-1 and col == bx1-1:
+                    line += "┘"
+                elif row == by0 or row == by1-1:
+                    line += "─"
+                elif col == bx0 or col == bx1-1:
+                    line += "│"
+                else:
+                    line += " "
+            else:
+                line += " "
+        print(line)
 
 
 def preprocess_gray(img):
@@ -48,19 +105,9 @@ def non_max_suppression_rects(rects, scores, overlap_thresh=0.3):
     return keep
 
 
-def capture_screen_snapshot(sct):
-    # if len(sct.monitors) > 1:
-    #     monitor = sct.monitors[1]
-    # else:
-    #     monitor = sct.monitors[0]
-    # print(f"Using monitor: {monitor}")
-
-    monitor = {
-        "top": 0,
-        "left": 0,
-        "width": 1400,
-        "height": 1200
-    }
+def capture_screen(sct):
+    # sct.monitors[1] is the primary monitor
+    monitor = sct.monitors[1]
     frame = np.array(sct.grab(monitor))
     frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
     return frame
@@ -68,19 +115,19 @@ def capture_screen_snapshot(sct):
 
 def open_live_window(window_name):
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(window_name, WINDOW_WIDTH, WINDOW_HEIGHT)
-    cv2.moveWindow(window_name, WINDOW_LEFT, WINDOW_TOP)
-    cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1)
 
 
-def detect_template_on_screen(screen_bgr, template_gray, match_threshold=0.70):
+def localize_screen(screen_bgr, template_bgr, match_threshold=0.70):
     screen_gray = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
+    template_gray = cv2.cvtColor(template_bgr, cv2.COLOR_BGR2GRAY)
+    
     screen_gray = preprocess_gray(screen_gray)
+    template_gray = preprocess_gray(template_gray)
     out = screen_bgr.copy()
 
     base_h, base_w = template_gray.shape
     if screen_gray.shape[0] < 20 or screen_gray.shape[1] < 20 or base_h < 20 or base_w < 20:
-        return out
+        return [], out
 
     template_gray = preprocess_gray(template_gray)
     template_edge_base = cv2.Canny(template_gray, 60, 150)
@@ -122,7 +169,7 @@ def detect_template_on_screen(screen_bgr, template_gray, match_threshold=0.70):
         cv2.rectangle(out, (x, y), (x + base_w, y + base_h), (0, 0, 255), 2)
         label = f"best {max_val:.2f} ({x},{y})"
         cv2.putText(out, label, (x, max(15, y - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
-        return out
+        return [(x, y, base_w, base_h, float(max_val))], out
 
     rects = [(x, y, w, h) for x, y, w, h, _ in candidates]
     scores = [s for _, _, _, _, s in candidates]
@@ -142,12 +189,14 @@ def detect_template_on_screen(screen_bgr, template_gray, match_threshold=0.70):
     for i, (x, y, w, h, conf) in enumerate(matches, start=1):
         print(f"Match {i}: conf={conf:.3f}, top_left=({x}, {y}), bottom_right=({x + w}, {y + h})")
 
-    for x, y, w, h, conf in matches:
-        cv2.rectangle(out, (x, y), (x + w, y + h), (0, 255, 255), 2)
+    for i, (x, y, w, h, conf) in enumerate(matches):
+        # Draw the best match in red (0, 0, 255), others in cyan/yellow (0, 255, 255)
+        color = (0, 0, 255) if i == 0 else (0, 255, 255)
+        cv2.rectangle(out, (x, y), (x + w, y + h), color, 2)
         label = f"{conf:.2f} ({x},{y})"
-        cv2.putText(out, label, (x, max(15, y - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(out, label, (x, max(15, y - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
 
-    return out
+    return matches, out
 
 
 def main():
@@ -168,9 +217,6 @@ def main():
         if template_gray is None:
             if not preview_open:
                 cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-                cv2.resizeWindow(window_name, WINDOW_WIDTH, WINDOW_HEIGHT)
-                cv2.moveWindow(window_name, WINDOW_LEFT, WINDOW_TOP)
-                cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1)
                 preview_open = True
 
             ok, frame = cap.read()
@@ -195,17 +241,29 @@ def main():
                 preview_open = False
                 time.sleep(0.35)
 
-                screen_bgr = capture_screen_snapshot(sct)
-                screen_result = detect_template_on_screen(screen_bgr, template_gray, match_threshold=match_threshold)
+                t_start = time.perf_counter()
+                screen_bgr = capture_screen(sct)
+                matches, screen_result = localize_screen(screen_bgr, frame, match_threshold=match_threshold)
+                t_end = time.perf_counter()
+                duration_ms = (t_end - t_start) * 1000
+                
+                if matches:
+                    x, y, w, h, conf = matches[0]
+                    x_min, y_min, x_max, y_max = x, y, x + w, y + h
+                    
+                    print(f"\n--- Result (Template Matching) ---")
+                    print(f"Confidence      : {conf:.3f}")
+                    print(f"Time Taken      : {duration_ms:.1f} ms")
+                    print(f"Position (X,Y)  : {x_min}, {y_min}")
+                    print(f"Size (WxH)      : {w} x {h}\n")
+
+                    print_screen_map(x_min, y_min, x_max, y_max)
             elif key in (27, ord('q')):
                 break
             continue
 
         if not preview_open:
             cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-            cv2.resizeWindow(window_name, WINDOW_WIDTH, WINDOW_HEIGHT)
-            cv2.moveWindow(window_name, WINDOW_LEFT, WINDOW_TOP)
-            cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1)
             preview_open = True
 
         cv2.imshow(window_name, screen_result)
