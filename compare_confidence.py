@@ -11,9 +11,7 @@ from screen_matching import localize_screen as localize_screen_sg
 from traditional import localize_sift, localize_orb, localize_ecc
 
 pairs = [
-    ("img3.png", "img3CA.png"),
-    ("img2.png", "img2CA.jpeg"),
-    ("vscode.png", "vscodeC.png")
+    ("test_data/img2.png", "test_data/img2CA.jpeg"),
 ]
 
 SHOW_VISUALIZATION = True  # Set to True to see side-by-side results
@@ -28,6 +26,9 @@ import os
 import sys
 from contextlib import redirect_stdout
 import time
+
+# Create img directory if it doesn't exist
+os.makedirs("img", exist_ok=True)
 
 for screen_file, template_file in pairs:
     screen_bgr = cv2.imread(screen_file)
@@ -95,7 +96,13 @@ for screen_file, template_file in pairs:
             col_idx = i % 3
             cv2.moveWindow(win_name, col_idx * (target_w + 10), row_idx * (target_h + 40))
             cv2.imshow(win_name, results[method][2])
+            
+            # Save the visualization to img/ folder
+            base_name = os.path.basename(screen_file)
+            save_path = os.path.join("img", f"{method}_{base_name}")
+            cv2.imwrite(save_path, results[method][2])
         
+        print(f"   -> Visualizations saved to img/ directory.")
         print("   -> Press any key to see next pair...")
         cv2.waitKey(0)
         cv2.destroyAllWindows()

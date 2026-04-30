@@ -1,9 +1,26 @@
 python demo_superglue.py --nms_radius 4 --keypoint_threshold 0.005 --max_keypoints 2048 --superglue outdoor --sinkhorn_iterations 20 --match_threshold 0.05
 
 
-# Finger Controller — Gesture Guide
+# VisionTouch: Screen Localization & Gesture Control
 
-This project controls the Windows mouse using hand tracking.
+## System Pipeline
+```mermaid
+graph TD
+    A[Webcam Capture] --> B{Calibration Trigger}
+    B -- Keystroke --> C[SuperGlue Matching]
+    C --> D[Homography Estimation]
+    D --> E[Lock Physical Screen Bounds]
+    
+    A --> F[Real-time Hand Tracking]
+    F --> G[MediaPipe Landmarks]
+    G --> H[Coordinate Mapping]
+    H --> I[Gesture State Machine]
+    I --> J[Windows System Input]
+    
+    E -.-> H
+```
+
+This project controls the Windows mouse using high-precision screen localization and real-time hand tracking.
 
 ## Gestures (single hand)
 

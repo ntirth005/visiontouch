@@ -1,0 +1,37 @@
+# System Architecture Diagrams (IEEE Column Optimized)
+
+This diagram is designed to be highly vertical and compact, making it perfect for fitting inside a single column of an IEEE paper.
+
+```mermaid
+graph TD
+    %% Define Styles
+    classDef hardware fill:#2d3436,stroke:#b2bec3,stroke-width:1px,color:#fff;
+    classDef software fill:#0984e3,stroke:#74b9ff,stroke-width:1px,color:#fff;
+    classDef algo fill:#6c5ce7,stroke:#a29bfe,stroke-width:1px,color:#fff;
+    classDef act fill:#00b894,stroke:#55efc4,stroke-width:1px,color:#fff;
+
+    %% Hardware / Input
+    Cam["Webcam Capture<br>(1280x720)"]:::hardware
+    Down["Downscale (640x360)"]:::software
+    
+    %% Split Path
+    Cam --> Down
+    Down -->|Spacebar<br>Calibration| Loc["Screen Localization<br>(SuperGlue/ORB)"]:::algo
+    Down -->|Continuous| Track["MediaPipe<br>Hand Tracking"]:::software
+    
+    %% Localization Path
+    Loc --> Hom["Homography &<br>Bounding Box"]:::software
+    
+    %% Sync point
+    Hom -.->|Calibrated Bounds| Map["Coordinate Mapper"]:::software
+    Track --> Map
+    
+    %% Output
+    Map --> Engine["Gesture Engine"]:::software
+    
+    Engine -->|1 Finger| Move["Cursor Move"]:::act
+    Engine -->|Pinch| Click["Left/Right Click"]:::act
+    Engine -->|2 Fingers| Zoom["Scroll/Zoom"]:::act
+    Engine -->|3/4 Fingers| Swipe["Desktop Swipe"]:::act
+    Engine -->|5 Fingers| Pause["Freeze System"]:::act
+```
